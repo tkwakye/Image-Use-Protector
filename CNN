@@ -1,0 +1,264 @@
+pip install keras
+pip install --upgrade pip
+pip install --upgrade tensorflow-gpu
+pip install pytorch-gradcam
+pip install conv
+pip install git+https://github.com/keisen/tf-keras-vis.git
+import os
+pip install tensorflow tf-keras-vis
+pip install tqdm
+pip install scikit-learn
+pip install matplotlib
+pip install pandas
+pip install tensorflow
+import xml.etree.ElementTree as ET
+from keras.utils import to_categorical
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+
+
+image_dir = 'Training/archive'
+image_files = [f for f in os.listdir(image_dir) if f.endswith('.jpg')]
+
+train_image = []
+for filename in tqdm(image_files):
+    img_path = os.path.join(image_dir, filename)
+    img = image.load_img(img_path, target_size=(28, 28), color_mode='grayscale')
+    img = image.img_to_array(img)
+    img = img / 255.0
+    train_image.append(img)
+
+X = np.array(train_image)
+
+# Set the directory to where your images and XML files are stored
+image_dir = 'Training/archive'
+xml_files = [f for f in os.listdir(image_dir) if f.endswith('.xml')]
+
+labels = []
+
+for filename in tqdm(xml_files):
+    xml_path = os.path.join(image_dir, filename)
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    
+    # Assuming each XML file contains multiple objects and you are interested in all of them
+    # If there are multiple 'object' elements, this will get the 'name' from the first one
+    # Adjust as needed if you want to handle multiple objects differently
+    label = root.find('.//object/name').text
+    labels.append(label)
+
+# Convert labels from strings to unique integers
+unique_labels = sorted(set(labels))
+label_to_int = {label: i for i, label in enumerate(unique_labels)}
+y_integers = [label_to_int[label] for label in labels]
+
+y = to_categorical(y_integers)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=42, test_size=0.2)
+
+model = Sequential()
+model.add(Conv2D(32, kernel_size=(3, 3),activation='relu',input_shape=(28,28,1)))
+model.add(Conv2D(64, (3, 3), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(0.25))
+model.add(Flatten())
+model.add(Dense(128, activation='relu'))
+model.add(Dropout(0.5))
+# model.add(Dense(10, activation='softmax'))
+model.add(Dense(len(unique_labels), activation='softmax'))  # Adjusted to match number of classes
+
+model.compile(loss='categorical_crossentropy',optimizer='Adam',metrics=['accuracy'])
+
+model.fit(X_train, y_train, epochs=10, validation_data=(X_test, y_test))
+
+# import test file
+
+test_image_dir = 'Training/archive'  # Replace with the actual path to your test images
+test = [f for f in os.listdir(test_image_dir) if f.endswith('.jpg')]
+test_images_np = np.array(test)
+
+	# testing images
+
+test_images = []
+for filename in tqdm(test):
+    img_path = os.path.join(test_image_dir, filename)
+    # Assuming your images are indeed in grayscale and the format matches ('.jpg' here)
+    img = image.load_img(img_path, target_size=(28, 28), color_mode='grayscale')
+    img = image.img_to_array(img)
+    img = img / 255.0
+    test_images.append(img)
+test_images_np = np.array(test_images)
+
+predictions = model.predict(test_images_np)
+
+predicted_classes = np.argmax(predictions, axis=1)
+highest_confidence = np.max(predictions, axis=1)
+
+def compute_and_plot_saliency(model, image_np, class_idx=0):
+    """
+    Compute and plot the saliency map for a given image and class index using the provided model.
+
+    Args:
+    - model: The trained model (assumed to be a TensorFlow model).
+    - image_np: The input image as a numpy array.
+    - class_idx: The class index for which to compute the saliency map.
+    """
+
+    # Convert the numpy image to a TensorFlow tensor
+    actual_image = tf.convert_to_tensor(image_np, dtype=tf.float32)
+    
+    # Use GradientTape to compute gradients
+    with tf.GradientTape() as tape:
+        tape.watch(actual_image)
+        predictions = model(actual_image)
+        loss = predictions[:, class_idx]
+
+    # Compute gradients with respect to the input image
+    gradients = tape.gradient(loss, actual_image)
+
+    # Ensure the gradient computation was successful
+    if gradients is not None:
+        # Process the gradients to obtain the saliency map
+        saliency_map = tf.abs(gradients).numpy()
+        saliency_map = np.max(saliency_map, axis=-1)[0]  # Collapse color dimension and remove batch dimension
+        
+        # Plotting
+        plt.figure(figsize=(10, 5))
+        
+        plt.subplot(1, 2, 1)
+        plt.title('Original Image')
+        plt.imshow(image_np[0, :, :, 0], cmap='gray')  # Adjust for actual image format
+        plt.axis('off')
+        
+        plt.subplot(1, 2, 2)
+        plt.title('Saliency Map')
+        plt.imshow(saliency_map, cmap='hot')
+        plt.axis('off')
+        
+        plt.show()
+    else:
+        print("Gradients could not be computed.")
+
+def isolate_brighter_pixels(saliency_map, threshold_ratio=0.9):
+    # Compute the threshold as a percentage of the maximum value of the saliency map
+    threshold = np.max(saliency_map) * threshold_ratio
+    
+    # Create a binary mask where pixels above the threshold are set to 1, others to 0
+    bright_pixels_mask = np.where(saliency_map > threshold, 1, 0)
+    
+    return bright_pixels_mask
+
+image_dir = 'Testing/test'
+image_files = [f for f in os.listdir(image_dir) if f.endswith('.jpg')]
+
+test_image = []
+for filename in tqdm(image_files):
+    img_path = os.path.join(image_dir, filename)
+    img = image.load_img(img_path, target_size=(28, 28), color_mode='grayscale')
+    img = image.img_to_array(img)
+    img = img / 255.0
+    test_image.append(img)
+
+X = np.array(test_image)
+
+def compute_all_class_saliency_maps(model, image_np, num_classes):
+    actual_image = tf.convert_to_tensor(image_np, dtype=tf.float32)
+    
+    for class_idx in range(num_classes):
+        with tf.GradientTape() as tape:
+            tape.watch(actual_image)
+            predictions = model(actual_image)
+            print(f"Predictions shape: {predictions.shape}")  # Debug: Check predictions shape
+            assert predictions.shape[-1] >= num_classes, "Model's output shape does not match num_classes"
+            loss = predictions[:, class_idx]
+
+        gradients = tape.gradient(loss, actual_image)
+        if gradients is not None:
+            saliency_map = tf.abs(gradients).numpy()
+            saliency_map = np.max(saliency_map, axis=-1)[0]  # Collapse color dimension and remove batch dimension
+
+            # Plotting
+            plt.figure(figsize=(10, 5))
+            plt.subplot(1, 2, 1)
+            plt.title(f'Original Image - Class {class_idx}')
+            plt.imshow(image_np[0, :, :, 0], cmap='gray')  # Adjust for actual image format
+            plt.axis('off')
+
+            plt.subplot(1, 2, 2)
+            plt.title(f'Saliency Map - Class {class_idx}')
+            plt.imshow(saliency_map, cmap='hot')
+            plt.axis('off')
+
+            plt.show()
+        else:
+            print(f"Gradients could not be computed for class index {class_idx}.")
+
+def subtly_modify_bright_pixels(image, saliency_map, threshold_ratio=0.9, intensity_change=0.02):
+    """
+    Slightly modify the bright pixels in the image based on the saliency map.
+    
+    Args:
+    - image (numpy array): The original image array.
+    - saliency_map (numpy array): The saliency map for the image.
+    - threshold_ratio (float): The ratio used to determine bright pixels in the saliency map.
+    - intensity_change (float): The fractional intensity change for modifying bright pixels.
+    
+    Returns:
+    - numpy array: The modified image with subtle changes to bright pixels.
+    """
+    # Ensure image and saliency_map are numpy arrays
+    image = np.array(image)
+    saliency_map = np.array(saliency_map)
+    
+    # Compute the threshold from the saliency map
+    threshold = np.max(saliency_map) * threshold_ratio
+    
+    # Identify bright pixels in the saliency map
+    bright_pixels_mask = saliency_map > threshold
+    
+    # Slightly increase or decrease the intensity of the bright pixels
+    # The choice of increasing or decreasing should be based on your specific needs and image characteristics
+    # Here, we'll decrease for illustration; ensure changes are within [0, 1] for normalized images
+    modified_image = np.copy(image)
+    modified_image[bright_pixels_mask] -= intensity_change
+    modified_image[modified_image < 0] = 0  # Ensure pixel values don't go below 0
+    
+    # Alternatively, increase intensity (ensure pixel values don't exceed 1 if image is normalized)
+    # modified_image[bright_pixels_mask] += intensity_change
+    # modified_image[modified_image > 1] = 1
+    
+    return modified_image
+
+for img in test_image:
+    # Convert the single image to a NumPy array if it's not already
+    # Ensure the image is of shape (1, height, width, channels)
+    img_np = np.array(img)[np.newaxis, :, :, np.newaxis]  # Adjust shape as necessary
+    
+    # Now call your function for each individual image
+    for num_classes in range(3):
+        compute_all_class_saliency_maps(model, img_np, num_classes=3)
+    # Convert the single image to a NumPy array if it's not already
+    img_np = np.array(img).reshape((1, 28, 28, 1))  # Adjust shape as necessary
+
+    # Compute saliency map for a specific class
+    for class_idx in range(3):
+        saliency_map = compute_all_class_saliency_maps(model, img_np, 3)
+
+        if saliency_map is not None:
+            # Subtly modify the image based on the saliency map
+            modified_img_np = subtly_modify_bright_pixels(img_np[0], saliency_map, threshold_ratio=0.9, intensity_change=0.02)
+    
+            # Convert modified image to the proper format before saving (e.g., 8-bit per channel for JPEG/PNG)
+            modified_img_np = np.clip(modified_img_np * 255, 0, 255).astype(np.uint8)  # Ensure pixel values are in 0-255
+    
+            # Save the modified image to a file
+            # Use PIL (Python Imaging Library) to handle image saving
+            # Create a filename for the modified image
+            filename = f"modified_image_{idx}.png"  # or ".jpg"
+            filepath = os.path.join(save_dir, filename)
+    
+            # Convert numpy array to a PIL Image and save to file
+            modified_img = Image.fromarray(modified_img_np[:, :, 0])  # Drop channel dimension for grayscale
+            modified_img.save(filepath)
+
+            plt.imshow(modified_image.png)
